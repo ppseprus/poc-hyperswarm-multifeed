@@ -3,20 +3,24 @@ const chalk = require('chalk');
 
 const hyperswarm = require('hyperswarm');
 const crypto = require('crypto');
-const multifeed = require('multifeed');
+
+const kappa = require('kappa-core');
+const memdb = require('memdb');
+const list = require('kappa-view-list');
+
 const pump = require('pump');
 
 if (!process.argv[2]) {
+	console.error('Please, provide `username@topic`');
 	return -1;
 }
-const [ username, discoveryKey ] = process.argv[2].split('@');
-if (!username || !discoveryKey) {
+const [me, topic] = process.argv[2].split('@');
+if (!me || !topic) {
+	console.error('Please, provide `username@topic`');
 	return -1;
 }
 
-const messages = [];
-let rowsDisplayed = 25;
-
+const logs = [];
 process.stdout.write('\x1Bc');
 const rl = readline.createInterface({
 	input: process.stdin,
@@ -24,27 +28,47 @@ const rl = readline.createInterface({
 	terminal: false,
 });
 
-rowsDisplayed = rl.output.rows - 2;
+let rowsDisplayed = rl.output.rows - 4;
 rl.output.on('resize', () => {
-	rowsDisplayed = rl.output.rows - 2
+	rowsDisplayed = rl.output.rows - 4
 });
 
-const multi = multifeed(`./.dat/multichat-${username}`, {
+const view = list(memdb(), (msg, next) => {
+	if (msg.value.timestamp && typeof msg.value.timestamp === 'string') {
+		next(null, [msg.value.timestamp]);
+	} else {
+		next();
+	}
+});
+
+const core = kappa(`./.dat/multichat-${me}`, {
 	valueEncoding: 'json',
 });
+core.use('chats', view);
 
-multi.on('feed', (feed) => {
-	messages.push(chalk.dim(`${(feed.writable) ? 'Writable' : 'Readable'} feed added (${feed.key.toString('hex')})`));
-	refreshScreen();
+core.on('feed', (feed) => {
+	//logs.push(chalk.dim(`${(feed.writable) ? 'Writable' : 'Readable'} feed added (${feed.key.toString('hex')})`));
 
 	feed.createReadStream({ live: true })
 		.on('data', ({ timestamp, username, data }) => {
 			formatMessage(timestamp, username, data);
-			refreshScreen();
 		});
 });
 
-multi.writer('local', (err, feed) => {
+core.api.chats.tail(rowsDisplayed, (messages) => {
+	process.stdout.write('\x1Bc');
+	logs.forEach((log) => {
+		rl.output.write(`${log}\n`);
+	});
+	rl.output.write('\n');
+	messages.forEach((message) => {
+		rl.output.write(`${formatMessage(message)}\n`);
+	});
+	rl.output.cursorTo(0, rowsDisplayed + 2);
+	rl.prompt();
+});
+
+core.writer('local', (err, feed) => {
 	rl.on('line', (line) => {
 		const timestamp = new Date().toISOString();
 		const data = line.toString().trim();
@@ -53,35 +77,31 @@ multi.writer('local', (err, feed) => {
 			type: 'chat-message',
 			timestamp,
 			data,
-			username,
+			username: me,
 		});
 	});
 });
 
 const swarm = hyperswarm();
-const topic = crypto.createHash('sha256')
-	.update(discoveryKey)
+const discoveryKey = crypto.createHash('sha256')
+	.update(topic)
 	.digest();
 
-swarm.join(topic, { lookup: true, announce: true });
+logs.push(`${chalk.dim('Discovery Key: ')}${discoveryKey.toString('hex')}`);
+
+swarm.join(discoveryKey, { lookup: true, announce: true });
 
 swarm.on('connection', (socket, info) => {
-	if (info.client) {
-		messages.push(chalk.dim(`Peer@${info.peer.host}:${info.peer.port}`));
-	}
+	/* if (info.client) {
+		logs.push(chalk.dim(`Peer@${info.peer.host}:${info.peer.port}`));
+	} */
 
-	pump(socket, multi.replicate(info.client, { live: true }), socket);
+	pump(socket, core.replicate(info.client, { live: true }), socket);
 });
 
-function formatMessage(timestamp, username, data) {
-	messages.push(`${chalk.dim(timestamp)} ${username}: ${data}`);
-}
-
-function refreshScreen() {
-	process.stdout.write('\x1Bc');
-	messages.slice(- rowsDisplayed).forEach((line) => {
-		rl.output.write(`${line}\n`);
-	});
-	rl.output.cursorTo(0, rowsDisplayed + 2);
-	rl.prompt();
+function formatMessage({ value: { timestamp, username, data } }) {
+	if (username === me) {
+		username = chalk.blue(username);
+	}
+	return `${chalk.dim(timestamp)} ${username}: ${data}`;
 }
