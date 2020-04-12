@@ -2,6 +2,10 @@
   "name": "poc-hyperswarm-multifeed",
   "description": "Experimenting with hyperswarm and multifeed",
   "author": "ppseprus",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/ppseprus/poc-hyperswarm-multifeed.git"
+  },
   "license": "MIT",
   "keywords": [
     "poc",
