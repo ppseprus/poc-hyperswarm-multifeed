@@ -20,6 +20,8 @@ if (!me || !topic) {
 	return -1;
 }
 
+const system = 'system';
+
 const logs = [];
 process.stdout.write('\x1Bc');
 const rl = readline.createInterface({
@@ -33,6 +35,13 @@ rl.output.on('resize', () => {
 	rowsDisplayed = rl.output.rows - 4
 });
 
+const swarm = hyperswarm();
+const discoveryKey = crypto.createHash('sha256')
+	.update(topic)
+	.digest();
+
+logs.push(`${chalk.dim('Discovery Key: ')}${discoveryKey.toString('hex')}`);
+
 const view = list(memdb(), (msg, next) => {
 	if (msg.value.timestamp && typeof msg.value.timestamp === 'string') {
 		next(null, [msg.value.timestamp]);
@@ -41,7 +50,7 @@ const view = list(memdb(), (msg, next) => {
 	}
 });
 
-const core = kappa(`./.dat/multichat-${me}`, {
+const core = kappa(`./.dat/${discoveryKey.toString('hex')}-${Buffer.from(me).toString('hex')}`, {
 	valueEncoding: 'json',
 });
 core.use('chats', view);
@@ -69,6 +78,13 @@ core.api.chats.tail(rowsDisplayed, (messages) => {
 });
 
 core.writer('local', (err, feed) => {
+	feed.append({
+		type: 'chat-message',
+		timestamp: new Date().toISOString(),
+		data: `${me} joining ${topic}`,
+		username: system,
+	});
+
 	rl.on('line', (line) => {
 		const timestamp = new Date().toISOString();
 		const data = line.toString().trim();
@@ -82,13 +98,6 @@ core.writer('local', (err, feed) => {
 	});
 });
 
-const swarm = hyperswarm();
-const discoveryKey = crypto.createHash('sha256')
-	.update(topic)
-	.digest();
-
-logs.push(`${chalk.dim('Discovery Key: ')}${discoveryKey.toString('hex')}`);
-
 swarm.join(discoveryKey, { lookup: true, announce: true });
 
 swarm.on('connection', (socket, info) => {
@@ -100,6 +109,10 @@ swarm.on('connection', (socket, info) => {
 });
 
 function formatMessage({ value: { timestamp, username, data } }) {
+	if (username === system) {
+		username = chalk.yellow(username);
+		data = chalk.grey(data);
+	}
 	if (username === me) {
 		username = chalk.blue(username);
 	}
